@@ -1,5 +1,6 @@
 #include <unistd.h>
 #include <stdlib.h>
+#include <time.h>
 #include <error.h>
 #include <systemd/sd-bus.h>
 
@@ -70,12 +71,23 @@ static int prepare_sleep(sd_bus_message *m, void *data, sd_bus_error *err) {
 }
 
 int main(int argc, char *argv[]) {
+  static const char* usage = "Usage: %s <TIME> <LOCKER> [ARGS...]\n";
+  char* name = "myautolock";
+  char** locker_argv;
   int r = 0;
+  time_t t0, t1, te, tl;
 
-  if(argc < 2) {
-    char* name = "myautolock";
-    if(argc == 1) name = argv[0];
-    eprintf("Usage: %s <LOCKER> [ARGS...]\n", name);
+  if(argc > 0) name = argv[0];
+
+  if(argc < 3) {
+    eprintf(usage, name);
+    return 1;
+  }
+  locker_argv = argv+2;
+
+  if((tl = atoi(argv[1])) == 0) {
+    eprintf(usage, name);
+    puts("TIME must be a non-zero integer.");
     return 1;
   }
 
@@ -89,11 +101,20 @@ int main(int argc, char *argv[]) {
                           "/org/freedesktop/login1",
                           "org.freedesktop.login1.Manager",
                           "PrepareForSleep",
-                          prepare_sleep, argv+1);
+                          prepare_sleep, locker_argv);
+  if(r < 0)
+    error(1, -r, "Failed to match prepare for sleep");
+
+  t1 = t0 = time(NULL);
+  te = 0;
 
   while(r >= 0) {
+    r = sd_bus_wait( bus, (tl-te)*1e6 );
+    if((te = time(&t1) - t0) >= tl) {
+      t0 = time(NULL);
+      lock_screen(locker_argv);
+    }
     r = sd_bus_process(bus, NULL);
-    if(r == 0) sd_bus_wait(bus, UINT64_MAX);
   }
 
   sd_bus_unref(bus);

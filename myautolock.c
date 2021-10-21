@@ -1,13 +1,18 @@
+#include <xcb/xcb.h>
+#include <xcb/xproto.h>
+
 #include <unistd.h>
 #include <stdlib.h>
 #include <time.h>
 #include <error.h>
+
 #include <systemd/sd-bus.h>
 
 #define eprintf(FMT,...) fprintf(stderr,FMT __VA_OPT__(,) __VA_ARGS__)
 
 static int lock = -1;
 static sd_bus *bus;
+static xcb_connection_t *disp;
 
 static int timer_up(time_t tu, time_t *ret) {
   static time_t t0 = INT64_MIN, i = 0, te = 0, up;
@@ -90,29 +95,42 @@ static int prepare_sleep(sd_bus_message *m, void *data, sd_bus_error *err) {
   return 0;
 }
 
-int main(int argc, char *argv[]) {
+struct opts {
+  time_t time;
+  char** locker;
+};
+
+static struct opts parse_args(int argc, char* argv[]) {
+  struct opts o;
   static const char* usage = "Usage: %s <TIME> <LOCKER> [ARGS...]\n";
   char* name = "myautolock";
-  char** locker_argv;
-  int r = 0;
-  time_t time, remaining;
 
   if(argc > 0) name = argv[0];
 
   if(argc < 3) {
     eprintf(usage, name);
-    return 1;
+    exit(1);
   }
-  locker_argv = argv+2;
+  o.locker = argv+2;
 
-  if((time = atoi(argv[1])) == 0) {
+  if((o.time = atoi(argv[1])) == 0) {
     eprintf(usage, name);
     puts("TIME must be a non-zero integer.");
-    return 1;
+    exit(1);
   }
+
+  return o;
+}
+
+int main(int argc, char *argv[]) {
+  int r = 0;
+  time_t remaining;
+  const struct opts o = parse_args(argc, argv);
 
   if((r = sd_bus_default_system(&bus)) < 0)
     error(1, -r, "Failed to open system bus");
+
+  disp = xcb_connect(NULL, NULL);
 
   aquire_sleep_lock();
 
@@ -121,16 +139,17 @@ int main(int argc, char *argv[]) {
                           "/org/freedesktop/login1",
                           "org.freedesktop.login1.Manager",
                           "PrepareForSleep",
-                          prepare_sleep, locker_argv);
+                          prepare_sleep, o.locker);
   if(r < 0)
     error(1, -r, "Failed to match prepare for sleep");
 
   while(r >= 0) {
     r = sd_bus_process(bus, NULL);
-    if(timer_up(time, &remaining)) lock_screen(locker_argv);
+    if(timer_up(o.time, &remaining)) lock_screen(o.locker);
     if(r == 0) r = sd_bus_wait( bus, remaining*1e6 );
   }
 
+  xcb_disconnect(disp);
   sd_bus_unref(bus);
   return 0;
 }

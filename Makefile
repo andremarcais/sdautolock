@@ -1,5 +1,5 @@
-CFLAGS=`pkg-config --cflags libsystemd`
-LDFLAGS=`pkg-config --libs libsystemd`
+CFLAGS=`pkg-config --cflags libsystemd xcb`
+LDFLAGS=`pkg-config --libs libsystemd xcb`
 PREFIX="/usr/local"
 
 myautolock: myautolock.o

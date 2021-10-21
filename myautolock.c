@@ -5,11 +5,6 @@
 
 #define eprintf(FMT,...) fprintf(stderr,FMT __VA_OPT__(,) __VA_ARGS__)
 
-static void lock_screen() {
-  sleep(1);
-  eprintf("screen locked! (not really.)");
-}
-
 static int lock = -1;
 static sd_bus *bus;
 
@@ -44,6 +39,20 @@ static void release_sleep_lock() {
   if(lock != -1) {
     close(lock);
     lock = -1;
+  }
+}
+
+static void lock_screen() {
+  switch(fork()) {
+  case -1:
+    perror("Failed run fork screen locker");
+    break;
+  case 0:
+    release_sleep_lock();
+    execlp("mylock", "mylock", (char*)NULL);
+    perror("Failed to exec locker");
+  default:
+    return;
   }
 }
 

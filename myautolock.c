@@ -1,5 +1,6 @@
 #include <xcb/xcb.h>
 #include <xcb/xproto.h>
+#include <xcb/screensaver.h>
 
 #include <unistd.h>
 #include <stdlib.h>
@@ -13,25 +14,6 @@
 static int lock = -1;
 static sd_bus *bus;
 static xcb_connection_t *disp;
-
-static int timer_up(time_t tu, time_t *ret) {
-  static time_t t0 = INT64_MIN, i = 0, te = 0, up;
-  if(!i) {
-    time(&t0);
-    i = 1;
-    up = 0;
-  } else {
-    if((te = time(NULL) - t0) >= tu) {
-      time(&t0);
-      te = 0;
-      up = 1;
-    } else {
-      up = 0;
-    }
-  }
-  if(ret) *ret = tu - te;
-  return up;
-}
 
 static void aquire_sleep_lock() {
   sd_bus_error err = SD_BUS_ERROR_NULL;
@@ -89,10 +71,36 @@ static int prepare_sleep(sd_bus_message *m, void *data, sd_bus_error *err) {
     lock_screen(argv);
     release_sleep_lock();
   } else {
-    timer_up(0, NULL); // reset timer
     aquire_sleep_lock();
   }
   return 0;
+}
+
+static xcb_window_t connect_and_get_root() {
+  int scrnum;
+  disp = xcb_connect(NULL, &scrnum);
+  const xcb_setup_t *setup = xcb_get_setup(disp);
+  xcb_screen_iterator_t iter = xcb_setup_roots_iterator(setup);
+  for(int i = 0; i < scrnum; ++i) xcb_screen_next(&iter);
+  xcb_screen_t *scr = iter.data;
+  return scr->root;
+}
+
+static int has_screensaver() {
+  xcb_query_extension_cookie_t cok = xcb_query_extension(disp, 16, "MIT-SCREEN-SAVER");
+  xcb_query_extension_reply_t *rep = xcb_query_extension_reply(disp, cok, NULL);
+  int present = rep->present;
+  free(rep);
+  return present;
+}
+
+static time_t remaining_idle_time(xcb_window_t root, time_t tt) {
+  xcb_screensaver_query_info_cookie_t cok = xcb_screensaver_query_info(disp, root);
+  xcb_screensaver_query_info_reply_t *rep = xcb_screensaver_query_info_reply(disp, cok, NULL);
+  time_t te = rep->ms_since_user_input / 1000;
+  free(rep);
+  if(te < tt) return tt - te;
+  else return 0;
 }
 
 struct opts {
@@ -115,7 +123,7 @@ static struct opts parse_args(int argc, char* argv[]) {
 
   if((o.time = atoi(argv[1])) == 0) {
     eprintf(usage, name);
-    puts("TIME must be a non-zero integer.");
+    fputs("TIME must be a non-zero integer.\n",stderr);
     exit(1);
   }
 
@@ -124,13 +132,19 @@ static struct opts parse_args(int argc, char* argv[]) {
 
 int main(int argc, char *argv[]) {
   int r = 0;
-  time_t remaining;
+  xcb_window_t root;
+  time_t rem;
   const struct opts o = parse_args(argc, argv);
 
   if((r = sd_bus_default_system(&bus)) < 0)
     error(1, -r, "Failed to open system bus");
 
-  disp = xcb_connect(NULL, NULL);
+  root = connect_and_get_root();
+
+  if(!has_screensaver()) {
+    fputs("Screensaver not suported by Xorg server.",stderr);
+    return 1;
+  }
 
   aquire_sleep_lock();
 
@@ -145,8 +159,8 @@ int main(int argc, char *argv[]) {
 
   while(r >= 0) {
     r = sd_bus_process(bus, NULL);
-    if(timer_up(o.time, &remaining)) lock_screen(o.locker);
-    if(r == 0) r = sd_bus_wait( bus, remaining*1e6 );
+    if((rem = remaining_idle_time(root, o.time)) == 0) lock_screen(o.locker);
+    if(r == 0) r = sd_bus_wait( bus, rem*1e6 );
   }
 
   xcb_disconnect(disp);

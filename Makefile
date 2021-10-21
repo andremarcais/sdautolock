@@ -1,5 +1,5 @@
-CFLAGS=`pkg-config --cflags libsystemd xcb`
-LDFLAGS=`pkg-config --libs libsystemd xcb`
+CFLAGS=`pkg-config --cflags libsystemd xcb xcb-screensaver` -Wall -Wunused
+LDFLAGS=`pkg-config --libs libsystemd xcb xcb-screensaver`
 PREFIX="/usr/local"
 
 myautolock: myautolock.o

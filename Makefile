@@ -1,5 +1,6 @@
 CFLAGS=`pkg-config --cflags libsystemd`
 LDFLAGS=`pkg-config --libs libsystemd`
+PREFIX="/usr/local"
 
 myautolock: myautolock.o
 	gcc $(LDFLAGS) myautolock.o -o $(@)
@@ -9,3 +10,5 @@ myautolock.o: myautolock.c
 
 myautolock.c:
 
+install: myautolock
+	install myautolock $(PREFIX)/bin

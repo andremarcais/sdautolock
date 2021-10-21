@@ -42,14 +42,14 @@ static void release_sleep_lock() {
   }
 }
 
-static void lock_screen() {
+static void lock_screen(char** argv) {
   switch(fork()) {
   case -1:
     perror("Failed run fork screen locker");
     break;
   case 0:
     release_sleep_lock();
-    execlp("mylock", "mylock", (char*)NULL);
+    execvp(argv[0], argv);
     perror("Failed to exec locker");
   default:
     return;
@@ -57,10 +57,11 @@ static void lock_screen() {
 }
 
 static int prepare_sleep(sd_bus_message *m, void *data, sd_bus_error *err) {
+  char **argv = (char**)data;
   int enter;
   sd_bus_message_read(m, "b", &enter);
   if(enter) {
-    lock_screen();
+    lock_screen(argv);
     release_sleep_lock();
   } else {
     aquire_sleep_lock();
@@ -70,6 +71,13 @@ static int prepare_sleep(sd_bus_message *m, void *data, sd_bus_error *err) {
 
 int main(int argc, char *argv[]) {
   int r = 0;
+
+  if(argc < 2) {
+    char* name = "myautolock";
+    if(argc == 1) name = argv[0];
+    eprintf("Usage: %s <LOCKER> [ARGS...]\n", name);
+    return 1;
+  }
 
   if((r = sd_bus_default_system(&bus)) < 0)
     error(1, -r, "Failed to open system bus");
@@ -81,7 +89,7 @@ int main(int argc, char *argv[]) {
                           "/org/freedesktop/login1",
                           "org.freedesktop.login1.Manager",
                           "PrepareForSleep",
-                          prepare_sleep, NULL);
+                          prepare_sleep, argv+1);
 
   while(r >= 0) {
     r = sd_bus_process(bus, NULL);

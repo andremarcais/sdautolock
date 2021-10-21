@@ -12,3 +12,9 @@ myautolock.c:
 
 install: myautolock
 	install myautolock $(PREFIX)/bin
+
+uninstall:
+	unlink $(PREFIX)/bin/myautolock
+
+clean:
+	rm myautolock.o myautolock

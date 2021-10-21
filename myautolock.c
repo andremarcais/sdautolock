@@ -9,6 +9,25 @@
 static int lock = -1;
 static sd_bus *bus;
 
+static int timer_up(time_t tu, time_t *ret) {
+  static time_t t0 = INT64_MIN, i = 0, te = 0, up;
+  if(!i) {
+    time(&t0);
+    i = 1;
+    up = 0;
+  } else {
+    if((te = time(NULL) - t0) >= tu) {
+      time(&t0);
+      te = 0;
+      up = 1;
+    } else {
+      up = 0;
+    }
+  }
+  if(ret) *ret = tu - te;
+  return up;
+}
+
 static void aquire_sleep_lock() {
   sd_bus_error err = SD_BUS_ERROR_NULL;
   sd_bus_message *rep;
@@ -65,6 +84,7 @@ static int prepare_sleep(sd_bus_message *m, void *data, sd_bus_error *err) {
     lock_screen(argv);
     release_sleep_lock();
   } else {
+    timer_up(0, NULL); // reset timer
     aquire_sleep_lock();
   }
   return 0;
@@ -75,7 +95,7 @@ int main(int argc, char *argv[]) {
   char* name = "myautolock";
   char** locker_argv;
   int r = 0;
-  time_t t0, t1, te, tl;
+  time_t time, remaining;
 
   if(argc > 0) name = argv[0];
 
@@ -85,7 +105,7 @@ int main(int argc, char *argv[]) {
   }
   locker_argv = argv+2;
 
-  if((tl = atoi(argv[1])) == 0) {
+  if((time = atoi(argv[1])) == 0) {
     eprintf(usage, name);
     puts("TIME must be a non-zero integer.");
     return 1;
@@ -105,16 +125,10 @@ int main(int argc, char *argv[]) {
   if(r < 0)
     error(1, -r, "Failed to match prepare for sleep");
 
-  t1 = t0 = time(NULL);
-  te = 0;
-
   while(r >= 0) {
-    r = sd_bus_wait( bus, (tl-te)*1e6 );
-    if((te = time(&t1) - t0) >= tl) {
-      t0 = time(NULL);
-      lock_screen(locker_argv);
-    }
     r = sd_bus_process(bus, NULL);
+    if(timer_up(time, &remaining)) lock_screen(locker_argv);
+    if(r == 0) r = sd_bus_wait( bus, remaining*1e6 );
   }
 
   sd_bus_unref(bus);

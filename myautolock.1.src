@@ -1,4 +1,4 @@
-.TH "MYAUTOLOCK" 1 __DATE__ "" ""
+.TH "MYAUTOLOCK" 1 "__DATE__" "__SOURCE__" "myautolock Manual"
 .
 .SH NAME
 myautolock \- simple command to run screen locker

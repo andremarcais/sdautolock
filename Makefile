@@ -1,7 +1,12 @@
 CFLAGS=`pkg-config --cflags libsystemd xcb xcb-screensaver` -Wall -Wunused
 LDFLAGS=`pkg-config --libs libsystemd xcb xcb-screensaver`
-PREFIX="/usr/local"
+
 DATE=`git log -n 1 --format=%as HEAD`
+SOURCE=myautolock `git log -n 1 --format=%h HEAD`
+
+PREFIX="/usr/local"
+
+all: myautolock myautolock.1
 
 myautolock: myautolock.o
 	gcc $(LDFLAGS) $? -o $@
@@ -12,7 +17,7 @@ myautolock.o: myautolock.c
 myautolock.c:
 
 myautolock.1: myautolock.1.src
-	sed "s/__DATE__/$(DATE)/g" < $? > $@
+	sed "s/__DATE__/$(DATE)/g; s/__SOURCE__/$(SOURCE)/g" < $? > $@
 
 myautolock.1.src:
 
@@ -24,4 +29,4 @@ uninstall:
 	unlink $(PREFIX)/bin/myautolock
 
 clean:
-	rm myautolock.o myautolock
+	rm myautolock.o myautolock myautolock.1

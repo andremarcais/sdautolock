@@ -3,7 +3,10 @@
 #include <xcb/screensaver.h>
 
 #include <unistd.h>
+#include <sys/wait.h>
+#include <fcntl.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <time.h>
 #include <error.h>
 
@@ -25,7 +28,7 @@ static void aquire_sleep_lock() {
                           "org.freedesktop.login1.Manager",
                           "Inhibit", &err, &rep, "ssss",
                           "sleep", "myautolock", "locking", "delay");
-  if( r< 0 ) {
+  if( r < 0 ) {
     if(sd_bus_error_is_set(&err)) {
       eprintf("Failed to inhibit lock: %s: %s\n", err.name, err.message);
       sd_bus_error_free(&err);
@@ -50,15 +53,29 @@ static void release_sleep_lock() {
 }
 
 static void lock_screen(char** argv) {
+  char *lock_str;
+  size_t lock_len;
   switch(fork()) {
   case -1:
     perror("Failed run fork screen locker");
     break;
   case 0:
-    release_sleep_lock();
+    // child also recieves sleep lock (or a dummy) and must release it
+    if(lock == -1) lock = open("/dev/null", O_RDWR);
+
+    lock_len = snprintf(NULL, 0, "%d", lock) + 1;
+    lock_str = malloc(lock_len);
+    snprintf(lock_str, lock_len, "%d", lock);
+    setenv("MY_SLEEP_LOCK_FD", lock_str, 1);
+    free(lock_str);
+
     execvp(argv[0], argv);
     perror("Failed to exec locker");
+    exit(1);
   default:
+    release_sleep_lock();
+    wait(NULL);
+    aquire_sleep_lock();
     return;
   }
 }
@@ -67,12 +84,7 @@ static int prepare_sleep(sd_bus_message *m, void *data, sd_bus_error *err) {
   char **argv = (char**)data;
   int enter;
   sd_bus_message_read(m, "b", &enter);
-  if(enter) {
-    lock_screen(argv);
-    release_sleep_lock();
-  } else {
-    aquire_sleep_lock();
-  }
+  if(enter) lock_screen(argv);
   return 0;
 }
 
@@ -133,7 +145,7 @@ static struct opts parse_args(int argc, char* argv[]) {
 int main(int argc, char *argv[]) {
   int r = 0;
   xcb_window_t root;
-  time_t rem;
+  time_t rem = 1000;
   const struct opts o = parse_args(argc, argv);
 
   if((r = sd_bus_default_system(&bus)) < 0)

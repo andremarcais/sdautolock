@@ -18,6 +18,18 @@ static int lock = -1;
 static sd_bus *bus;
 static xcb_connection_t *disp;
 
+static void dbus_error(sd_bus_message *rep, sd_bus_error *err, int code, const char* msg) {
+  if(sd_bus_error_is_set(err)) {
+    eprintf("%s: %s: %s\n", msg, err->name, err->message);
+    sd_bus_error_free(err);
+    sd_bus_message_unref(rep);
+    exit(1);
+  } else {
+    sd_bus_message_unref(rep);
+    error(1, code, msg);
+  }
+}
+
 // if none acquired already, globally acquire a sleep lock
 static void acquire_sleep_lock() {
   sd_bus_error err = SD_BUS_ERROR_NULL;
@@ -29,17 +41,7 @@ static void acquire_sleep_lock() {
                           "org.freedesktop.login1.Manager",
                           "Inhibit", &err, &rep, "ssss",
                           "sleep", "myautolock", "locking", "delay");
-  if( r < 0 ) {
-    if(sd_bus_error_is_set(&err)) {
-      eprintf("Failed to inhibit lock: %s: %s\n", err.name, err.message);
-      sd_bus_error_free(&err);
-      sd_bus_message_unref(rep);
-      exit(1);
-    } else {
-      sd_bus_message_unref(rep);
-      error(1, -r, "Failed to inhibit lock");
-    }
-  }
+  if( r < 0 ) dbus_error(rep, &err, -r, "Failed to acquire sleep inhibitor");
   sd_bus_error_free(&err);
   sd_bus_message_read(rep, "h", &fd);
   lock = dup(fd);
@@ -160,20 +162,33 @@ static struct opts parse_args(int argc, char* argv[]) {
 
 static void setup_signal_matches(const struct opts o) {
   int r;
+  sd_bus_error err = SD_BUS_ERROR_NULL;
+  sd_bus_message *rep;
+  char* path;
 
   r = sd_bus_match_signal(bus, NULL,
                           "org.freedesktop.login1",
-                          "/org/freedesktop/login1/session/self",
+                          "/org/freedesktop/login1",
                           "org.freedesktop.login1.Manager",
                           "PrepareForSleep", prepare_sleep, o.locker);
   if(r < 0)
     error(1, -r, "Failed to match PrepareForSleep signal");
 
+  r = sd_bus_call_method(bus, "org.freedesktop.login1",
+                         "/org/freedesktop/login1",
+                         "org.freedesktop.login1.Manager",
+                         "GetSession", &err, &rep, "s", "");
+  if( r < 0 )
+    dbus_error(rep, &err, -r, "Failed to get current session");
+  sd_bus_error_free(&err);
+  sd_bus_message_read(rep, "o", &path);
+
   r = sd_bus_match_signal(bus, NULL,
                           "org.freedesktop.login1",
-                          NULL, // TODO only current session?
+                          path,
                           "org.freedesktop.login1.Session",
                           "Lock", lock_session, o.locker);
+  sd_bus_message_unref(rep);
   if(r < 0)
     error(1, -r, "Failed to match lock Lock signal");
 }

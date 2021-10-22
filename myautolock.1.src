@@ -1,0 +1,20 @@
+.TH "MYAUTOLOCK" 1 __DATE__ "" ""
+.
+.SH NAME
+myautolock \- simple command to run screen locker
+.
+.SH SYNOPSIS
+.B myautolock
+.I TIME
+.I LOCKER
+[\fI\,ARGS\/\fR...]
+.
+.SH DESCRIPTION
+Runs LOCKER when either the X session has been idle for TIME seconds or the systemd is preparing to sleep.
+LOCKER should close the file descriptor $MY_SLEEP_LOCK_FD when it has locked the screen.
+LOCKER will not be invoked again until the previous instance exits.
+.
+.SH SEE ALSO
+i3lock(1),
+xss-lock(1),
+i3lock-color(1)

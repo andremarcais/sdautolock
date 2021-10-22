@@ -10,7 +10,9 @@ myautolock \- simple command to run screen locker
 [\fI\,ARGS\/\fR...]
 .
 .SH DESCRIPTION
-Runs LOCKER when either the X session has been idle for TIME seconds or the systemd is preparing to sleep.
+Runs LOCKER when either the X session has been idle for TIME seconds,
+systemd is preparing to sleep,
+or when the session is locked.
 LOCKER should close the file descriptor $MY_SLEEP_LOCK_FD when it has locked the screen.
 LOCKER will not be invoked again until the previous instance exits.
 .

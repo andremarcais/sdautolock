@@ -18,7 +18,8 @@ static int lock = -1;
 static sd_bus *bus;
 static xcb_connection_t *disp;
 
-static void aquire_sleep_lock() {
+// if none acquired already, globally acquire a sleep lock
+static void acquire_sleep_lock() {
   sd_bus_error err = SD_BUS_ERROR_NULL;
   sd_bus_message *rep;
   int fd, r;
@@ -43,8 +44,11 @@ static void aquire_sleep_lock() {
   sd_bus_message_read(rep, "h", &fd);
   lock = dup(fd);
   sd_bus_message_unref(rep);
+  // don't close lock fd on exec
+  fcntl(lock, F_SETFD, ~FD_CLOEXEC & fcntl(lock, F_GETFD));
 }
 
+// globally release lock if locked
 static void release_sleep_lock() {
   if(lock != -1) {
     close(lock);
@@ -52,6 +56,7 @@ static void release_sleep_lock() {
   }
 }
 
+// run screen locker, release our sleep lock until child returns
 static void lock_screen(char** argv) {
   char *lock_str;
   size_t lock_len;
@@ -75,11 +80,12 @@ static void lock_screen(char** argv) {
   default:
     release_sleep_lock();
     wait(NULL);
-    aquire_sleep_lock();
+    acquire_sleep_lock();
     return;
   }
 }
 
+// handles PrepareForSleep signal
 static int prepare_sleep(sd_bus_message *m, void *data, sd_bus_error *err) {
   char **argv = (char**)data;
   int enter;
@@ -88,6 +94,14 @@ static int prepare_sleep(sd_bus_message *m, void *data, sd_bus_error *err) {
   return 0;
 }
 
+// handles Lock signal
+static int lock_session(sd_bus_message *m, void *data, sd_bus_error *err) {
+  char **argv = (char**)data;
+  lock_screen(argv);
+  return 0;
+}
+
+// X root window used to get idle time
 static xcb_window_t connect_and_get_root() {
   int scrnum;
   disp = xcb_connect(NULL, &scrnum);
@@ -98,6 +112,7 @@ static xcb_window_t connect_and_get_root() {
   return scr->root;
 }
 
+// query screen saver extension
 static int has_screensaver() {
   xcb_query_extension_cookie_t cok = xcb_query_extension(disp, 16, "MIT-SCREEN-SAVER");
   xcb_query_extension_reply_t *rep = xcb_query_extension_reply(disp, cok, NULL);
@@ -106,6 +121,7 @@ static int has_screensaver() {
   return present;
 }
 
+// amount of idle time left of `tt` seconds before lock should start
 static time_t remaining_idle_time(xcb_window_t root, time_t tt) {
   xcb_screensaver_query_info_cookie_t cok = xcb_screensaver_query_info(disp, root);
   xcb_screensaver_query_info_reply_t *rep = xcb_screensaver_query_info_reply(disp, cok, NULL);
@@ -142,6 +158,26 @@ static struct opts parse_args(int argc, char* argv[]) {
   return o;
 }
 
+static void setup_signal_matches(const struct opts o) {
+  int r;
+
+  r = sd_bus_match_signal(bus, NULL,
+                          "org.freedesktop.login1",
+                          "/org/freedesktop/login1/session/self",
+                          "org.freedesktop.login1.Manager",
+                          "PrepareForSleep", prepare_sleep, o.locker);
+  if(r < 0)
+    error(1, -r, "Failed to match PrepareForSleep signal");
+
+  r = sd_bus_match_signal(bus, NULL,
+                          "org.freedesktop.login1",
+                          NULL, // TODO only current session?
+                          "org.freedesktop.login1.Session",
+                          "Lock", lock_session, o.locker);
+  if(r < 0)
+    error(1, -r, "Failed to match lock Lock signal");
+}
+
 int main(int argc, char *argv[]) {
   int r = 0;
   xcb_window_t root;
@@ -158,17 +194,11 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  aquire_sleep_lock();
+  acquire_sleep_lock();
 
-  r = sd_bus_match_signal(bus, NULL,
-                          "org.freedesktop.login1",
-                          "/org/freedesktop/login1",
-                          "org.freedesktop.login1.Manager",
-                          "PrepareForSleep",
-                          prepare_sleep, o.locker);
-  if(r < 0)
-    error(1, -r, "Failed to match prepare for sleep");
+  setup_signal_matches(o);
 
+  r = 0;
   while(r >= 0) {
     r = sd_bus_process(bus, NULL);
     if((rem = remaining_idle_time(root, o.time)) == 0) lock_screen(o.locker);

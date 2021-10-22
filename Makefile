@@ -1,8 +1,8 @@
-CFLAGS=`pkg-config --cflags libsystemd xcb xcb-screensaver` -Wall -Wunused
-LDFLAGS=`pkg-config --libs libsystemd xcb xcb-screensaver`
+override CFLAGS += `pkg-config --cflags libsystemd xcb xcb-screensaver` -Wall -Wunused
+override LDFLAGS += `pkg-config --libs libsystemd xcb xcb-screensaver`
 
-DATE=`git log -n 1 --format=%as HEAD`
-SOURCE=myautolock `git log -n 1 --format=%h HEAD`
+DATE = `git log -n 1 --format=%as HEAD`
+SOURCE = myautolock `git log -n 1 --format=%h HEAD`
 
 PREFIX="/usr/local"
 

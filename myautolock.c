@@ -18,36 +18,38 @@ static int lock = -1;
 static sd_bus *bus;
 static xcb_connection_t *disp;
 
-static void dbus_error(sd_bus_message *rep, sd_bus_error *err, int code, const char* msg) {
+// prints error freeing `rep` and `err` returning an exit code
+static int dbus_print_error(sd_bus_message *rep, sd_bus_error *err, int code, const char* msg) {
   if(sd_bus_error_is_set(err)) {
     eprintf("%s: %s: %s\n", msg, err->name, err->message);
     sd_bus_error_free(err);
-    sd_bus_message_unref(rep);
-    exit(1);
+    return 1;
   } else {
-    sd_bus_message_unref(rep);
-    error(1, code, msg);
+    eprintf("%s: %s\n", msg, strerror(code));
+    return 1;
   }
 }
 
 // if none acquired already, globally acquire a sleep lock
-static void acquire_sleep_lock() {
+static int acquire_sleep_lock() {
   sd_bus_error err = SD_BUS_ERROR_NULL;
   sd_bus_message *rep;
   int fd, r;
-  if(lock != -1) return; // already has lock
+  if(lock != -1) return 1; // already has lock
   r = sd_bus_call_method( bus, "org.freedesktop.login1",
                           "/org/freedesktop/login1",
                           "org.freedesktop.login1.Manager",
                           "Inhibit", &err, &rep, "ssss",
                           "sleep", "myautolock", "locking", "delay");
-  if( r < 0 ) dbus_error(rep, &err, -r, "Failed to acquire sleep inhibitor");
+  if( r < 0 )
+    return dbus_print_error(rep, &err, -r, "Failed to acquire sleep inhibitor");
   sd_bus_error_free(&err);
   sd_bus_message_read(rep, "h", &fd);
   lock = dup(fd);
   sd_bus_message_unref(rep);
   // don't close lock fd on exec
   fcntl(lock, F_SETFD, ~FD_CLOEXEC & fcntl(lock, F_GETFD));
+  return 0;
 }
 
 // globally release lock if locked
@@ -179,7 +181,7 @@ static void setup_signal_matches(const struct opts o) {
                          "org.freedesktop.login1.Manager",
                          "GetSession", &err, &rep, "s", "");
   if( r < 0 )
-    dbus_error(rep, &err, -r, "Failed to get current session");
+    exit( dbus_print_error(rep, &err, -r, "Failed to get current session") );
   sd_bus_error_free(&err);
   sd_bus_message_read(rep, "o", &path);
 

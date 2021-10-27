@@ -162,19 +162,18 @@ static struct opts parse_args(int argc, char* argv[]) {
   return o;
 }
 
-static void setup_signal_matches(const struct opts o) {
+struct matcher {
+  char* session;
+  char** locker;
+  sd_bus_slot *sleep;
+  sd_bus_slot *lock;
+};
+
+static void init_matcher(struct matcher *m, const struct opts o) {
   int r;
   sd_bus_error err = SD_BUS_ERROR_NULL;
   sd_bus_message *rep;
   char* path;
-
-  r = sd_bus_match_signal(bus, NULL,
-                          "org.freedesktop.login1",
-                          "/org/freedesktop/login1",
-                          "org.freedesktop.login1.Manager",
-                          "PrepareForSleep", prepare_sleep, o.locker);
-  if(r < 0)
-    error(1, -r, "Failed to match PrepareForSleep signal");
 
   r = sd_bus_call_method(bus, "org.freedesktop.login1",
                          "/org/freedesktop/login1",
@@ -183,22 +182,45 @@ static void setup_signal_matches(const struct opts o) {
   if( r < 0 )
     exit( dbus_print_error(rep, &err, -r, "Failed to get current session") );
   sd_bus_error_free(&err);
+
   sd_bus_message_read(rep, "o", &path);
+  m->session = malloc(strlen(path)+1);
+  strcpy(m->session, path);
+  sd_bus_message_unref(rep);
+
+  m->locker = o.locker;
+}
+
+static void activate_matches(struct matcher *m) {
+  int r;
 
   r = sd_bus_match_signal(bus, NULL,
                           "org.freedesktop.login1",
-                          path,
+                          "/org/freedesktop/login1",
+                          "org.freedesktop.login1.Manager",
+                          "PrepareForSleep", prepare_sleep, m->locker);
+  if(r < 0)
+    error(1, -r, "Failed to match PrepareForSleep signal");
+
+  r = sd_bus_match_signal(bus, NULL,
+                          "org.freedesktop.login1",
+                          m->session,
                           "org.freedesktop.login1.Session",
-                          "Lock", lock_session, o.locker);
-  sd_bus_message_unref(rep);
+                          "Lock", lock_session, m->locker);
   if(r < 0)
     error(1, -r, "Failed to match lock Lock signal");
+}
+
+static void deactivate_matches(struct matcher *m) {
+  sd_bus_slot_unref(m->lock);
+  sd_bus_slot_unref(m->sleep);
 }
 
 int main(int argc, char *argv[]) {
   int r = 0;
   xcb_window_t root;
   time_t rem = 1000;
+  struct matcher m;
   const struct opts o = parse_args(argc, argv);
 
   if((r = sd_bus_default_system(&bus)) < 0)
@@ -213,12 +235,14 @@ int main(int argc, char *argv[]) {
 
   acquire_sleep_lock();
 
-  setup_signal_matches(o);
+  init_matcher(&m, o);
+  activate_matches(&m);
 
   r = 0;
   while(r >= 0) {
-    r = sd_bus_process(bus, NULL);
+    while((r = sd_bus_process(bus, NULL)) > 0);
     if((rem = remaining_idle_time(root, o.time)) == 0) lock_screen(o.locker);
+    if(r == 0) r = sd_bus_process(bus, NULL);
     if(r == 0) r = sd_bus_wait( bus, rem*1e6 );
   }
 

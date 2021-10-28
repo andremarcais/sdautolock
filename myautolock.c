@@ -1,7 +1,3 @@
-#include <xcb/xcb.h>
-#include <xcb/xproto.h>
-#include <xcb/screensaver.h>
-
 #include <unistd.h>
 #include <sys/wait.h>
 #include <fcntl.h>
@@ -14,11 +10,21 @@
 
 #define eprintf(FMT,...) fprintf(stderr,FMT __VA_OPT__(,) __VA_ARGS__)
 
-static int lock = -1;
-static int locker = 0;
+static int lock = -1; // sleep inhibitor lock
 static sd_bus *bus;
-static xcb_connection_t *disp;
 static sd_event *loop;
+
+// command line options
+static struct {
+  time_t time;
+  char* idle;
+  char** locker;
+} o;
+
+static int handle_time_up(sd_event_source *s, uint64_t usec, void *userdata);
+static int handle_locker_exit(sd_event_source *s, const siginfo_t *si, void *userdata);
+static int handle_lock_session(sd_bus_message *m, void *data, sd_bus_error *err);
+static int handle_prepare_sleep(sd_bus_message *m, void *data, sd_bus_error *err);
 
 // prints error freeing `rep` and `err` returning an exit code
 static int dbus_print_error(sd_bus_message *rep, sd_bus_error *err, int code, const char* msg) {
@@ -62,19 +68,14 @@ static void release_sleep_lock() {
   }
 }
 
-static int handle_locker_exit(sd_event_source *s, const siginfo_t *si, void *userdata) {
-  int *pid = (pid_t*) userdata;
-  *pid = 0;
-  return 0;
-}
-
 // run screen locker if not running. this is idempotent
 static void lock_screen(char** argv) {
   static pid_t pid = 0;
   char *lock_str;
   size_t lock_len;
-  if(locker) return;
-  switch((locker = fork())) {
+  int r;
+  if(pid) return;
+  switch((pid = fork())) {
   case -1:
     perror("Failed run fork screen locker");
     break;
@@ -92,87 +93,33 @@ static void lock_screen(char** argv) {
     perror("Failed to exec locker");
     exit(1);
   default:
-    sd_event_add_child(loop, NULL, pid, WEXITED, handle_locker_exit, &pid);
+    r = sd_event_add_child(loop, NULL, pid, WEXITED, handle_locker_exit, &pid);
+    if(r < 0) eprintf("Failed to add child %d event: %s\n", pid, strerror(-r));
     return;
   }
 }
 
-// handles PrepareForSleep signal
-static int handle_prepare_sleep(sd_bus_message *m, void *data, sd_bus_error *err) {
-  char **argv = (char**)data;
-  int enter;
-  sd_bus_message_read(m, "b", &enter);
-  if(enter) {
-    lock_screen(argv);
-    release_sleep_lock();
-  } else {
-    acquire_sleep_lock();
-  }
-  return 0;
-}
-
-// handles Lock signal
-static int handle_lock_session(sd_bus_message *m, void *data, sd_bus_error *err) {
-  char **argv = (char**)data;
-  lock_screen(argv);
-  return 0;
-}
-
-// X root window used to get idle time
-static xcb_window_t connect_and_get_root() {
-  int scrnum;
-  disp = xcb_connect(NULL, &scrnum);
-  const xcb_setup_t *setup = xcb_get_setup(disp);
-  xcb_screen_iterator_t iter = xcb_setup_roots_iterator(setup);
-  for(int i = 0; i < scrnum; ++i) xcb_screen_next(&iter);
-  xcb_screen_t *scr = iter.data;
-  return scr->root;
-}
-
-// query screen saver extension
-static int has_screensaver() {
-  xcb_query_extension_cookie_t cok = xcb_query_extension(disp, 16, "MIT-SCREEN-SAVER");
-  xcb_query_extension_reply_t *rep = xcb_query_extension_reply(disp, cok, NULL);
-  int present = rep->present;
-  free(rep);
-  return present;
-}
-
-// amount of idle time left of `tt` seconds before lock should start
-static time_t remaining_idle_time(xcb_window_t root, time_t tt) {
-  xcb_screensaver_query_info_cookie_t cok = xcb_screensaver_query_info(disp, root);
-  xcb_screensaver_query_info_reply_t *rep = xcb_screensaver_query_info_reply(disp, cok, NULL);
-  time_t te = rep->ms_since_user_input / 1000;
-  free(rep);
-  if(te < tt) return tt - te;
-  else return 0;
-}
-
-struct opts {
-  time_t time;
-  char** locker;
-};
-
-static struct opts parse_args(int argc, char* argv[]) {
-  struct opts o;
-  static const char* usage = "Usage: %s <TIME> <LOCKER> [ARGS...]\n";
+static int parse_args(int argc, char* argv[]) {
+  static const char* usage = "Usage: %s IDLE TIME LOCKER [ARGS...]\n";
   char* name = "myautolock";
 
   if(argc > 0) name = argv[0];
 
-  if(argc < 3) {
+  if(argc < 4) {
     eprintf(usage, name);
-    exit(1);
+    return 1;
   }
-  o.locker = argv+2;
 
-  if((o.time = atoi(argv[1])) == 0) {
+  o.locker = argv+3;
+  o.idle = argv[1];
+
+  if((o.time = atoi(argv[2])) == 0) {
     eprintf(usage, name);
     fputs("TIME must be a non-zero integer.\n",stderr);
-    exit(1);
+    return 1;
   }
 
-  return o;
+  return 0;
 }
 
 struct matcher {
@@ -182,7 +129,7 @@ struct matcher {
   sd_bus_slot *lock;
 };
 
-static void init_matcher(struct matcher *m, const struct opts o) {
+static void init_matcher(struct matcher *m) {
   int r;
   sd_bus_error err = SD_BUS_ERROR_NULL;
   sd_bus_message *rep;
@@ -229,38 +176,110 @@ static void deactivate_matches(struct matcher *m) {
   sd_bus_slot_unref(m->sleep);
 }
 
+static unsigned remaining_idle_time() {
+  FILE *input;
+  time_t time;
+  int pid, fds[2];
+  if(pipe(fds) == -1) {
+    perror("failed to open idle time utility pipe");
+    return o.time;
+  }
+  switch((pid = fork())) {
+  case -1:
+    perror("Failed fork idle time utility\n");
+    return o.time;
+  case 0:
+    close(fds[0]);
+    close(lock);
+    dup2(fds[1], 1);
+    execlp(o.idle, o.idle, NULL);
+    perror("failed to exec idle utility");
+    exit(1);
+  default:
+    close(fds[1]);
+    input = fdopen(fds[0], "r");
+    fscanf(input, "%ld", &time);
+    waitpid(pid, NULL, 0);
+    time /= 1000;
+    if(o.time > time) return o.time - time;
+    else return 0;
+  }
+}
+
+static void set_timer(time_t time) {
+  int r;
+  r = sd_event_add_time_relative(loop, NULL, CLOCK_MONOTONIC, time*1e6, 0, handle_time_up, NULL);
+  if(r < 0) eprintf("Failed to set timer: %s\n", strerror(-r));
+}
+
+// lock screen when time elapses
+static int handle_time_up(sd_event_source *s, uint64_t usec, void *userdata) {
+  time_t rem;
+  if((rem = remaining_idle_time())) {
+    set_timer(rem);
+  } else {
+    lock_screen(o.locker);
+  }
+  return 0;
+}
+
+static int handle_locker_exit(sd_event_source *s, const siginfo_t *si, void *userdata) {
+  int *pid = (pid_t*) userdata;
+  *pid = 0;
+  set_timer(o.time);
+  return 0;
+}
+
+// handles PrepareForSleep signal
+static int handle_prepare_sleep(sd_bus_message *m, void *data, sd_bus_error *err) {
+  char **argv = (char**)data;
+  int enter;
+  sd_bus_message_read(m, "b", &enter);
+  if(enter) {
+    lock_screen(argv);
+    release_sleep_lock();
+  } else {
+    acquire_sleep_lock();
+  }
+  return 0;
+}
+
+// handles Lock signal
+static int handle_lock_session(sd_bus_message *m, void *data, sd_bus_error *err) {
+  char **argv = (char**)data;
+  lock_screen(argv);
+  return 0;
+}
+
 int main(int argc, char *argv[]) {
   int r = 0;
-  xcb_window_t root;
-  time_t rem = 1000;
+  sigset_t sigs;
   struct matcher m;
-  const struct opts o = parse_args(argc, argv);
+
+  if((r = parse_args(argc, argv))) return r;
 
   if((r = sd_bus_default_system(&bus)) < 0)
     error(1, -r, "Failed to open system bus");
 
-  root = connect_and_get_root();
-
-  if(!has_screensaver()) {
-    fputs("Screensaver not suported by Xorg server.",stderr);
-    return 1;
-  }
-
   acquire_sleep_lock();
 
-  init_matcher(&m, o);
+  init_matcher(&m);
   activate_matches(&m);
+
+  sigemptyset(&sigs);
+  sigaddset(&sigs, SIGCHLD);
+  sigprocmask(SIG_BLOCK, &sigs, NULL);
 
   r = sd_event_default(&loop);
   if(r < 0) eprintf("Failed to allocate event loop: %s\n", strerror(-r));
 
+  set_timer(o.time);
   sd_bus_attach_event(bus, loop, 0);
 
   r = sd_event_loop(loop);
   if(r < 0) eprintf("Failed to start event loop: %s\n", strerror(-r));
 
   sd_event_unref(loop);
-  xcb_disconnect(disp);
   sd_bus_unref(bus);
   return r;
 }

@@ -15,8 +15,10 @@
 #define eprintf(FMT,...) fprintf(stderr,FMT __VA_OPT__(,) __VA_ARGS__)
 
 static int lock = -1;
+static int locker = 0;
 static sd_bus *bus;
 static xcb_connection_t *disp;
+static sd_event *loop;
 
 // prints error freeing `rep` and `err` returning an exit code
 static int dbus_print_error(sd_bus_message *rep, sd_bus_error *err, int code, const char* msg) {
@@ -30,7 +32,7 @@ static int dbus_print_error(sd_bus_message *rep, sd_bus_error *err, int code, co
   }
 }
 
-// if none acquired already, globally acquire a sleep lock
+// if none acquired already, globally acquire a sleep lock. this is idempotent
 static int acquire_sleep_lock() {
   sd_bus_error err = SD_BUS_ERROR_NULL;
   sd_bus_message *rep;
@@ -60,11 +62,19 @@ static void release_sleep_lock() {
   }
 }
 
-// run screen locker, release our sleep lock until child returns
+static int handle_locker_exit(sd_event_source *s, const siginfo_t *si, void *userdata) {
+  int *pid = (pid_t*) userdata;
+  *pid = 0;
+  return 0;
+}
+
+// run screen locker if not running. this is idempotent
 static void lock_screen(char** argv) {
+  static pid_t pid = 0;
   char *lock_str;
   size_t lock_len;
-  switch(fork()) {
+  if(locker) return;
+  switch((locker = fork())) {
   case -1:
     perror("Failed run fork screen locker");
     break;
@@ -82,24 +92,27 @@ static void lock_screen(char** argv) {
     perror("Failed to exec locker");
     exit(1);
   default:
-    release_sleep_lock();
-    wait(NULL);
-    acquire_sleep_lock();
+    sd_event_add_child(loop, NULL, pid, WEXITED, handle_locker_exit, &pid);
     return;
   }
 }
 
 // handles PrepareForSleep signal
-static int prepare_sleep(sd_bus_message *m, void *data, sd_bus_error *err) {
+static int handle_prepare_sleep(sd_bus_message *m, void *data, sd_bus_error *err) {
   char **argv = (char**)data;
   int enter;
   sd_bus_message_read(m, "b", &enter);
-  if(enter) lock_screen(argv);
+  if(enter) {
+    lock_screen(argv);
+    release_sleep_lock();
+  } else {
+    acquire_sleep_lock();
+  }
   return 0;
 }
 
 // handles Lock signal
-static int lock_session(sd_bus_message *m, void *data, sd_bus_error *err) {
+static int handle_lock_session(sd_bus_message *m, void *data, sd_bus_error *err) {
   char **argv = (char**)data;
   lock_screen(argv);
   return 0;
@@ -198,7 +211,7 @@ static void activate_matches(struct matcher *m) {
                           "org.freedesktop.login1",
                           "/org/freedesktop/login1",
                           "org.freedesktop.login1.Manager",
-                          "PrepareForSleep", prepare_sleep, m->locker);
+                          "PrepareForSleep", handle_prepare_sleep, m->locker);
   if(r < 0)
     error(1, -r, "Failed to match PrepareForSleep signal");
 
@@ -206,7 +219,7 @@ static void activate_matches(struct matcher *m) {
                           "org.freedesktop.login1",
                           m->session,
                           "org.freedesktop.login1.Session",
-                          "Lock", lock_session, m->locker);
+                          "Lock", handle_lock_session, m->locker);
   if(r < 0)
     error(1, -r, "Failed to match lock Lock signal");
 }
@@ -238,15 +251,16 @@ int main(int argc, char *argv[]) {
   init_matcher(&m, o);
   activate_matches(&m);
 
-  r = 0;
-  while(r >= 0) {
-    while((r = sd_bus_process(bus, NULL)) > 0);
-    if((rem = remaining_idle_time(root, o.time)) == 0) lock_screen(o.locker);
-    if(r == 0) r = sd_bus_process(bus, NULL);
-    if(r == 0) r = sd_bus_wait( bus, rem*1e6 );
-  }
+  r = sd_event_default(&loop);
+  if(r < 0) eprintf("Failed to allocate event loop: %s\n", strerror(-r));
 
+  sd_bus_attach_event(bus, loop, 0);
+
+  r = sd_event_loop(loop);
+  if(r < 0) eprintf("Failed to start event loop: %s\n", strerror(-r));
+
+  sd_event_unref(loop);
   xcb_disconnect(disp);
   sd_bus_unref(bus);
-  return 0;
+  return r;
 }

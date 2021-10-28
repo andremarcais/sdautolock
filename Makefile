@@ -2,31 +2,31 @@ override CFLAGS += `pkg-config --cflags libsystemd xcb xcb-screensaver` -Wall -W
 override LDFLAGS += `pkg-config --libs libsystemd xcb xcb-screensaver`
 
 DATE = `git log -n 1 --format=%as HEAD`
-SOURCE = myautolock `git log -n 1 --format=%h HEAD`
+SOURCE = sdautolock `git log -n 1 --format=%h HEAD`
 
 PREFIX="/usr/local"
 
-all: myautolock myautolock.1
+all: sdautolock sdautolock.1
 
-myautolock: myautolock.o
+sdautolock: sdautolock.o
 	gcc $(LDFLAGS) $? -o $@
 
-myautolock.o: myautolock.c
+sdautolock.o: sdautolock.c
 	gcc -c $(CFLAGS) $? -o $@ -Wall
 
-myautolock.c:
+sdautolock.c:
 
-myautolock.1: myautolock.1.src
+sdautolock.1: sdautolock.1.src
 	sed "s/__DATE__/$(DATE)/g; s/__SOURCE__/$(SOURCE)/g" < $? > $@
 
-myautolock.1.src:
+sdautolock.1.src:
 
-install: myautolock myautolock.1
-	install myautolock $(PREFIX)/bin/
-	install myautolock.1 $(PREFIX)/share/man/man1/
+install: sdautolock sdautolock.1
+	install sdautolock $(PREFIX)/bin/
+	install sdautolock.1 $(PREFIX)/share/man/man1/
 
 uninstall:
-	unlink $(PREFIX)/bin/myautolock
+	unlink $(PREFIX)/bin/sdautolock
 
 clean:
-	rm myautolock.o myautolock myautolock.1
+	rm sdautolock.o sdautolock sdautolock.1

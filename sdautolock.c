@@ -211,7 +211,6 @@ static unsigned remaining_idle_time() {
 static void set_timer(time_t time) {
   static sd_event_source *src = NULL;
   int r;
-  eprintf("set timer to %ld\n", time);
   src = sd_event_source_disable_unref(src);
   if(time != 0) {
     r = sd_event_add_time_relative(loop, &src, CLOCK_MONOTONIC, time*1e6, 0, handle_time_up, &src);

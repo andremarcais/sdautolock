@@ -101,7 +101,8 @@ static void lock_screen(char** argv) {
 
 static int parse_args(int argc, char* argv[]) {
   static const char* usage = "Usage: %s IDLE TIME LOCKER [ARGS...]\n";
-  char* name = "myautolock";
+  static const char* name = "myautolock";
+  char *end;
 
   if(argc > 0) name = argv[0];
 
@@ -113,9 +114,10 @@ static int parse_args(int argc, char* argv[]) {
   o.locker = argv+3;
   o.idle = argv[1];
 
-  if((o.time = atoi(argv[2])) == 0) {
+  o.time = strtol(argv[2], &end, 10);
+  if(*end != '\0') {
     eprintf(usage, name);
-    fputs("TIME must be a non-zero integer.\n",stderr);
+    fputs("TIME must be an integer.\n",stderr);
     return 1;
   }
 
@@ -207,14 +209,21 @@ static unsigned remaining_idle_time() {
 }
 
 static void set_timer(time_t time) {
+  static sd_event_source *src = NULL;
   int r;
-  r = sd_event_add_time_relative(loop, NULL, CLOCK_MONOTONIC, time*1e6, 0, handle_time_up, NULL);
-  if(r < 0) eprintf("Failed to set timer: %s\n", strerror(-r));
+  eprintf("set timer to %ld\n", time);
+  src = sd_event_source_disable_unref(src);
+  if(time != 0) {
+    r = sd_event_add_time_relative(loop, &src, CLOCK_MONOTONIC, time*1e6, 0, handle_time_up, &src);
+    if(r < 0) eprintf("Failed to set timer: %s\n", strerror(-r));
+  }
 }
 
 // lock screen when time elapses
 static int handle_time_up(sd_event_source *s, uint64_t usec, void *userdata) {
+  sd_event_source **src = (sd_event_source**) userdata;
   time_t rem;
+  *src = sd_event_source_disable_unref(*src);
   if((rem = remaining_idle_time())) {
     set_timer(rem);
   } else {
@@ -251,6 +260,19 @@ static int handle_lock_session(sd_bus_message *m, void *data, sd_bus_error *err)
   return 0;
 }
 
+// USR1 and USR2 disable and enable timer based locking until next lock/unlock if not already locked
+static int handle_signal(sd_event_source *s, const struct signalfd_siginfo *si, void *userdata) {
+  switch(si->ssi_signo) {
+  case SIGUSR1:
+    set_timer(0);
+    break;
+  case SIGUSR2:
+    set_timer(o.time);
+    break;
+  }
+  return 0;
+}
+
 int main(int argc, char *argv[]) {
   int r = 0;
   sigset_t sigs;
@@ -268,12 +290,16 @@ int main(int argc, char *argv[]) {
 
   sigemptyset(&sigs);
   sigaddset(&sigs, SIGCHLD);
+  sigaddset(&sigs, SIGUSR1);
+  sigaddset(&sigs, SIGUSR2);
   sigprocmask(SIG_BLOCK, &sigs, NULL);
 
   r = sd_event_default(&loop);
   if(r < 0) eprintf("Failed to allocate event loop: %s\n", strerror(-r));
 
   set_timer(o.time);
+  sd_event_add_signal(loop, NULL, SIGUSR1, handle_signal, NULL);
+  sd_event_add_signal(loop, NULL, SIGUSR2, handle_signal, NULL);
   sd_bus_attach_event(bus, loop, 0);
 
   r = sd_event_loop(loop);

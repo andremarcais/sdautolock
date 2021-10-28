@@ -48,7 +48,7 @@ static int acquire_sleep_lock() {
                           "/org/freedesktop/login1",
                           "org.freedesktop.login1.Manager",
                           "Inhibit", &err, &rep, "ssss",
-                          "sleep", "myautolock", "locking", "delay");
+                          "sleep", "sdautolock", "locking", "delay");
   if( r < 0 )
     return dbus_print_error(rep, &err, -r, "Failed to acquire sleep inhibitor");
   sd_bus_error_free(&err);
@@ -86,7 +86,8 @@ static void lock_screen(char** argv) {
     lock_len = snprintf(NULL, 0, "%d", lock) + 1;
     lock_str = malloc(lock_len);
     snprintf(lock_str, lock_len, "%d", lock);
-    setenv("MY_SLEEP_LOCK_FD", lock_str, 1);
+    setenv("SD_SLEEP_LOCK_FD", lock_str, 1);
+    setenv("XSS_SLEEP_LOCK_FD", lock_str, 1); // for compatibility with i3lock/xss-lock
     free(lock_str);
 
     execvp(argv[0], argv);
@@ -101,7 +102,7 @@ static void lock_screen(char** argv) {
 
 static int parse_args(int argc, char* argv[]) {
   static const char* usage = "Usage: %s IDLE TIME LOCKER [ARGS...]\n";
-  static const char* name = "myautolock";
+  const char* name = "sdautolock";
   char *end;
 
   if(argc > 0) name = argv[0];

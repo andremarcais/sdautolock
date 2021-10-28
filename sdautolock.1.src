@@ -1,22 +1,72 @@
-.TH "MYAUTOLOCK" 1 "__DATE__" "__SOURCE__" "myautolock Manual"
+.TH "SDAUTOLOCK" 1 "__DATE__" "__SOURCE__" "sdautolock Manual"
 .
 .SH NAME
-myautolock \- simple command to run screen locker
+sdautolock \- simple command to run screen locker
 .
 .SH SYNOPSIS
-.B myautolock
-.I TIME
-.I LOCKER
-[\fI\,ARGS\/\fR...]
+.B sdautolock
+.I idle
+.I time
+.I locker
+[\fI\,args\/\fR...]
 .
 .SH DESCRIPTION
-Runs LOCKER when either the X session has been idle for TIME seconds,
+.B sdautolock
+runs
+.I locker
+when either
 systemd is preparing to sleep,
-or when the session is locked.
-LOCKER should close the file descriptor $MY_SLEEP_LOCK_FD when it has locked the screen.
-LOCKER will not be invoked again until the previous instance exits.
+when the session is locked,
+or after a certain time elapses.
+The program
+.I idle
+shall output how many seconds have elapsed
+out of the
+.I time
+seconds until the screen should automatically lock.
+If
+.I time
+is zero,
+.I idle
+is never called.
+.PP
+.I locker
+should close the file descriptor
+.I SD_SLEEP_LOCK_FD
+passed in the environment when it has locked the screen
+and exit when the screen has been unlocked.
+.I locker
+will not be invoked again until the previous instance exits.
+(In other words,
+locking is idempotent.)
+.PP
+.I SIGUSR1
+and
+.I SIGUSR2
+can be sent to respectively disable and enable timer based locking.
+.
+.SH EXAMPLE
+The command below locks the screen with i3lock and its "ignore empty password" option after 3 minutes of inactivity on X11:
+.EX
+sdautolock xprintidle 180 i3lock -e
+.EE
+.I i3lock
+closes
+.I SD_SLEEP_LOCK_FD
+as nececarry (see NOTES).
+.
+.SH NOTES
+.I XSS_SLEEP_LOCK_FD
+is set equal to
+.I SD_SLEEP_LOCK_FD
+since programs
+(like i3lock)
+will close it automatically.
 .
 .SH SEE ALSO
 i3lock(1),
-xss-lock(1),
-i3lock-color(1)
+i3lock-color(1),
+xprintidle(1),
+systemd(1),
+org.freedesktop.login1(5),
+xss-lock(1)

@@ -69,13 +69,13 @@ static void release_sleep_lock() {
   }
 }
 
-// run screen locker if not running. this is idempotent
+// run screen locker if not running. this is idempotent.
 static void lock_screen(char** argv) {
   static pid_t pid = 0;
   char *lock_str;
   size_t lock_len;
   int r;
-  if(pid) return; // idempotence
+  if(pid) return; // idempotence. see `handle_locker_exit`
   switch((pid = fork())) {
   case -1:
     perror("Failed run fork screen locker");
@@ -127,6 +127,7 @@ static int parse_args(int argc, char* argv[]) {
   return 0;
 }
 
+// get path to systemd logind dbus session object. string must be freed
 static char* get_session_path() {
   int r;
   sd_bus_error err = SD_BUS_ERROR_NULL;
@@ -149,7 +150,9 @@ static char* get_session_path() {
   return ret;
 }
 
-static void init_bus_matches(char** locker) {
+// setup signal handlers handle_prepare_sleep and handle_lock_session to
+// corresponding dbus signals
+static void setup_bus_matches(char** locker) {
   int r;
   char* session_path;
 
@@ -172,6 +175,8 @@ static void init_bus_matches(char** locker) {
     error(1, -r, "Failed to match lock Lock signal");
 }
 
+// calculate permited idle time minus elapsed idle time that is gotten by
+// running and external helper program who prints the elapsed idle time.
 static unsigned remaining_idle_time() {
   FILE *input;
   time_t time;
@@ -196,12 +201,14 @@ static unsigned remaining_idle_time() {
     input = fdopen(fds[0], "r");
     fscanf(input, "%ld", &time);
     waitpid(pid, NULL, 0);
-    time /= 1000;
+    time /= 1000; // the program outputs idle time in milliseconds
     if(o.time > time) return o.time - time;
     else return 0;
   }
 }
 
+// if `time == 0`, the timer is disabled. Otherwise it sets a timer for when to
+// check the idle time. `time` is in seconds.
 static void set_timer(time_t time) {
   static sd_event_source *src = NULL;
   int r;
@@ -235,7 +242,7 @@ static void setup_signals() {
     sd_event_add_signal(loop, NULL, sigs[i], handle_signal, NULL);
 }
 
-// lock screen when time elapses
+// lock screen when idled too long
 static int handle_time_up(sd_event_source *s, uint64_t usec, void *userdata) {
   sd_event_source **src = (sd_event_source**) userdata;
   time_t rem;
@@ -248,7 +255,7 @@ static int handle_time_up(sd_event_source *s, uint64_t usec, void *userdata) {
   return 0;
 }
 
-// allow locker to be run again. set timer. see `lock_screen`.
+// allow locker to be run again. also set timer. see `lock_screen`.
 static int handle_locker_exit(sd_event_source *s, const siginfo_t *si, void *userdata) {
   int *pid = (pid_t*) userdata;
   *pid = 0;
@@ -256,7 +263,8 @@ static int handle_locker_exit(sd_event_source *s, const siginfo_t *si, void *use
   return 0;
 }
 
-// handles PrepareForSleep signal
+// handles PrepareForSleep signal by locking and acquiring or releasing sleep
+// lock as necessary
 static int handle_prepare_sleep(sd_bus_message *m, void *data, sd_bus_error *err) {
   char **argv = (char**)data;
   int enter;
@@ -270,7 +278,7 @@ static int handle_prepare_sleep(sd_bus_message *m, void *data, sd_bus_error *err
   return 0;
 }
 
-// handles Lock signal
+// handles Lock signal by... well... locking.
 static int handle_lock_session(sd_bus_message *m, void *data, sd_bus_error *err) {
   char **argv = (char**)data;
   lock_screen(argv);
@@ -305,16 +313,17 @@ int main(int argc, char *argv[]) {
 
   acquire_sleep_lock();
 
-  init_bus_matches(o.locker);
+  setup_bus_matches(o.locker);
 
   r = sd_event_default(&loop);
   if(r < 0) eprintf("Failed to allocate event loop: %s\n", strerror(-r));
 
+  // attaches event sources to event loop
   set_timer(o.time);
   setup_signals();
   sd_bus_attach_event(bus, loop, 0);
 
-  r = sd_event_loop(loop);
+  r = sd_event_loop(loop); // run the event loop
   if(r < 0) eprintf("Failed to start event loop: %s\n", strerror(-r));
 
   sd_event_unref(loop);

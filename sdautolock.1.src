@@ -20,7 +20,7 @@ when the session is locked,
 or after a certain time elapses.
 The program
 .I idle
-shall output how many seconds have elapsed
+shall output how many milliseconds seconds have elapsed
 out of the
 .I time
 seconds until the screen should automatically lock.
@@ -53,7 +53,7 @@ sdautolock xprintidle 180 i3lock -e
 .I i3lock
 closes
 .I SD_SLEEP_LOCK_FD
-as nececarry (see NOTES).
+as necessary (see NOTES).
 .
 .SH NOTES
 .I XSS_SLEEP_LOCK_FD
@@ -62,6 +62,9 @@ is set equal to
 since programs
 (like i3lock)
 will close it automatically.
+.
+.SH AUTHOR
+Written by André Marçais.
 .
 .SH SEE ALSO
 i3lock(1),

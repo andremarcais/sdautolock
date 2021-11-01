@@ -22,9 +22,10 @@ static struct {
 } o;
 
 static int handle_time_up(sd_event_source *s, uint64_t usec, void *userdata);
-static int handle_locker_exit(sd_event_source *s, const siginfo_t *si, void *userdata);
 static int handle_lock_session(sd_bus_message *m, void *data, sd_bus_error *err);
 static int handle_prepare_sleep(sd_bus_message *m, void *data, sd_bus_error *err);
+static int handle_locker_exit(sd_event_source *s, const siginfo_t *si, void *userdata);
+static int handle_signal(sd_event_source *s, const struct signalfd_siginfo *si, void *userdata);
 
 // prints error freeing `rep` and `err` returning an exit code
 static int dbus_print_error(sd_bus_message *rep, sd_bus_error *err, int code, const char* msg) {
@@ -74,20 +75,20 @@ static void lock_screen(char** argv) {
   char *lock_str;
   size_t lock_len;
   int r;
-  if(pid) return;
+  if(pid) return; // idempotence
   switch((pid = fork())) {
   case -1:
     perror("Failed run fork screen locker");
     break;
   case 0:
-    // child also recieves sleep lock (or a dummy) and must release it
+    // child recieves a sleep lock (or a dummy fd) and must release it
     if(lock == -1) lock = open("/dev/null", O_RDWR);
 
     lock_len = snprintf(NULL, 0, "%d", lock) + 1;
     lock_str = malloc(lock_len);
     snprintf(lock_str, lock_len, "%d", lock);
     setenv("SD_SLEEP_LOCK_FD", lock_str, 1);
-    setenv("XSS_SLEEP_LOCK_FD", lock_str, 1); // for compatibility with i3lock/xss-lock
+    setenv("XSS_SLEEP_LOCK_FD", lock_str, 1); // compatibility with i3lock/xss-lock
     free(lock_str);
 
     execvp(argv[0], argv);
@@ -100,6 +101,7 @@ static void lock_screen(char** argv) {
   }
 }
 
+// command line arguments are stored in global `o`. Returns non-zero on error.
 static int parse_args(int argc, char* argv[]) {
   static const char* usage = "Usage: %s IDLE TIME LOCKER [ARGS...]\n";
   const char* name = "sdautolock";
@@ -219,6 +221,29 @@ static void set_timer(time_t time) {
   }
 }
 
+// see handle_signal
+static void setup_signals() {
+  static const int sigs[] = {
+    SIGUSR1,
+    SIGUSR2,
+    SIGTERM,
+    SIGINT
+  };
+  static const unsigned nsigs = sizeof(sigs)/sizeof(int);
+  sigset_t mask;
+  int i;
+
+  sigemptyset(&mask);
+  for(i = 0; i < nsigs; ++i)
+    sigaddset(&mask, sigs[i]);
+  sigaddset(&mask, SIGCHLD); // not included in `sigs` because handler added
+                             // latter per process
+  sigprocmask(SIG_BLOCK, &mask, NULL);
+
+  for(i = 0; i < nsigs; ++i)
+    sd_event_add_signal(loop, NULL, sigs[i], handle_signal, NULL);
+}
+
 // lock screen when time elapses
 static int handle_time_up(sd_event_source *s, uint64_t usec, void *userdata) {
   sd_event_source **src = (sd_event_source**) userdata;
@@ -232,6 +257,7 @@ static int handle_time_up(sd_event_source *s, uint64_t usec, void *userdata) {
   return 0;
 }
 
+// allow locker to be run again. set timer. see `lock_screen`.
 static int handle_locker_exit(sd_event_source *s, const siginfo_t *si, void *userdata) {
   int *pid = (pid_t*) userdata;
   *pid = 0;
@@ -260,7 +286,8 @@ static int handle_lock_session(sd_bus_message *m, void *data, sd_bus_error *err)
   return 0;
 }
 
-// USR1 and USR2 disable and enable timer based locking until next lock/unlock if not already locked
+// Handle signals other than SIGCHLD. USR1 and USR2 disable and enable timer
+// based locking until next lock/unlock cycle if not already locked
 static int handle_signal(sd_event_source *s, const struct signalfd_siginfo *si, void *userdata) {
   switch(si->ssi_signo) {
   case SIGUSR1:
@@ -269,13 +296,16 @@ static int handle_signal(sd_event_source *s, const struct signalfd_siginfo *si, 
   case SIGUSR2:
     set_timer(o.time);
     break;
+  case SIGTERM:
+  case SIGINT:
+    sd_event_exit(loop, 0);
+    break;
   }
   return 0;
 }
 
 int main(int argc, char *argv[]) {
   int r = 0;
-  sigset_t sigs;
   struct matcher m;
 
   if((r = parse_args(argc, argv))) return r;
@@ -288,24 +318,18 @@ int main(int argc, char *argv[]) {
   init_matcher(&m);
   activate_matches(&m);
 
-  sigemptyset(&sigs);
-  sigaddset(&sigs, SIGCHLD);
-  sigaddset(&sigs, SIGUSR1);
-  sigaddset(&sigs, SIGUSR2);
-  sigprocmask(SIG_BLOCK, &sigs, NULL);
-
   r = sd_event_default(&loop);
   if(r < 0) eprintf("Failed to allocate event loop: %s\n", strerror(-r));
 
   set_timer(o.time);
-  sd_event_add_signal(loop, NULL, SIGUSR1, handle_signal, NULL);
-  sd_event_add_signal(loop, NULL, SIGUSR2, handle_signal, NULL);
+  setup_signals();
   sd_bus_attach_event(bus, loop, 0);
 
   r = sd_event_loop(loop);
   if(r < 0) eprintf("Failed to start event loop: %s\n", strerror(-r));
 
   sd_event_unref(loop);
+  /* deactivate_matches(&m); */
   sd_bus_unref(bus);
   return r;
 }

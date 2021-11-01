@@ -9,10 +9,10 @@ PREFIX="/usr/local"
 all: sdautolock sdautolock.1
 
 sdautolock: sdautolock.o
-	gcc $(LDFLAGS) $? -o $@
+	$(CC) $(LDFLAGS) $? -o $@
 
 sdautolock.o: sdautolock.c
-	gcc -c $(CFLAGS) $? -o $@ -Wall
+	$(CC) -c $(CFLAGS) $? -o $@ -Wall
 
 sdautolock.c:
 

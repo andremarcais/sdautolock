@@ -127,18 +127,11 @@ static int parse_args(int argc, char* argv[]) {
   return 0;
 }
 
-struct matcher {
-  char* session;
-  char** locker;
-  sd_bus_slot *sleep;
-  sd_bus_slot *lock;
-};
-
-static void init_matcher(struct matcher *m) {
+static char* get_session_path() {
   int r;
   sd_bus_error err = SD_BUS_ERROR_NULL;
   sd_bus_message *rep;
-  char* path;
+  char *path, *ret;
 
   r = sd_bus_call_method(bus, "org.freedesktop.login1",
                          "/org/freedesktop/login1",
@@ -149,36 +142,34 @@ static void init_matcher(struct matcher *m) {
   sd_bus_error_free(&err);
 
   sd_bus_message_read(rep, "o", &path);
-  m->session = malloc(strlen(path)+1);
-  strcpy(m->session, path);
+  ret = malloc(strlen(path)+1);
+  strcpy(ret, path);
   sd_bus_message_unref(rep);
 
-  m->locker = o.locker;
+  return ret;
 }
 
-static void activate_matches(struct matcher *m) {
+static void init_bus_matches(char** locker) {
   int r;
+  char* session_path;
 
   r = sd_bus_match_signal(bus, NULL,
                           "org.freedesktop.login1",
                           "/org/freedesktop/login1",
                           "org.freedesktop.login1.Manager",
-                          "PrepareForSleep", handle_prepare_sleep, m->locker);
+                          "PrepareForSleep", handle_prepare_sleep, locker);
   if(r < 0)
     error(1, -r, "Failed to match PrepareForSleep signal");
 
+  session_path = get_session_path();
   r = sd_bus_match_signal(bus, NULL,
                           "org.freedesktop.login1",
-                          m->session,
+                          session_path,
                           "org.freedesktop.login1.Session",
-                          "Lock", handle_lock_session, m->locker);
+                          "Lock", handle_lock_session, locker);
+  free(session_path);
   if(r < 0)
     error(1, -r, "Failed to match lock Lock signal");
-}
-
-static void deactivate_matches(struct matcher *m) {
-  sd_bus_slot_unref(m->lock);
-  sd_bus_slot_unref(m->sleep);
 }
 
 static unsigned remaining_idle_time() {
@@ -306,7 +297,6 @@ static int handle_signal(sd_event_source *s, const struct signalfd_siginfo *si, 
 
 int main(int argc, char *argv[]) {
   int r = 0;
-  struct matcher m;
 
   if((r = parse_args(argc, argv))) return r;
 
@@ -315,8 +305,7 @@ int main(int argc, char *argv[]) {
 
   acquire_sleep_lock();
 
-  init_matcher(&m);
-  activate_matches(&m);
+  init_bus_matches(o.locker);
 
   r = sd_event_default(&loop);
   if(r < 0) eprintf("Failed to allocate event loop: %s\n", strerror(-r));
@@ -329,7 +318,6 @@ int main(int argc, char *argv[]) {
   if(r < 0) eprintf("Failed to start event loop: %s\n", strerror(-r));
 
   sd_event_unref(loop);
-  /* deactivate_matches(&m); */
   sd_bus_unref(bus);
   return r;
 }

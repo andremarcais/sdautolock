@@ -55,21 +55,34 @@ closes
 .I SD_SLEEP_LOCK_FD
 as necessary (see NOTES).
 .
-.SH NOTES
+.SH ENVIRONMENT
+.I SD_SLEEP_LOCK_FD
+is set in the locker program's environment and must be closed to allow the system to sleep.
+.PP
 .I XSS_SLEEP_LOCK_FD
 is set equal to
 .I SD_SLEEP_LOCK_FD
-since programs
+for compatibility with programs
 (like i3lock)
-will close it automatically.
+that close it automatically.
 .
 .SH AUTHOR
 Written by André Marçais.
+.SH COPYRIGHT
+Copyright \(co 2021 André Marçais.
+Licensed under
+.UR https://gnu.org/licenses/gpl.html
+GPLv3
+.UE .
 .
 .SH SEE ALSO
-i3lock(1),
-i3lock-color(1),
-xprintidle(1),
-systemd(1),
-org.freedesktop.login1(5),
-xss-lock(1)
+.BR i3lock (1),
+.BR i3lock-color (1),
+.BR xprintidle (1),
+.BR systemd (1),
+.BR org.freedesktop.login1 (5),
+.BR xss-lock (1)
+.
+\" Local Variables:
+\" mode: nroff
+\" End:

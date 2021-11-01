@@ -1,3 +1,6 @@
+// Copyright 2021 André Marçais.
+// This file is licensed under GPLv3. See LICENSE.
+
 #include <unistd.h>
 #include <sys/wait.h>
 #include <fcntl.h>

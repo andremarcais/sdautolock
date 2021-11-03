@@ -1,4 +1,4 @@
-.TH "SDAUTOLOCK" 1 "__DATE__" "__SOURCE__" "sdautolock Manual"
+.TH "SDAUTOLOCK" 1 "__DATE__" "sdautolock __VERSION__" "sdautolock Manual"
 .
 .SH NAME
 sdautolock \- simple command to run screen locker

@@ -2,7 +2,7 @@ override CFLAGS += `pkg-config --cflags libsystemd` -Wall -Wunused
 override LDFLAGS += `pkg-config --libs libsystemd`
 
 DATE = `git log -n 1 --format=%as HEAD`
-SOURCE = sdautolock `git log -n 1 --format=%h HEAD`
+VERSION = `git describe --tags --always`
 
 PREFIX="/usr/local"
 
@@ -17,9 +17,18 @@ sdautolock.o: sdautolock.c
 sdautolock.c:
 
 sdautolock.1: sdautolock.1.src
-	sed "s/__DATE__/$(DATE)/g; s/__SOURCE__/$(SOURCE)/g" < $? > $@
+	sed "s/__DATE__/$(DATE)/g; s/__VERSION__/$(VERSION)/g" < $? > $@
 
 sdautolock.1.src:
+
+release: all
+	git archive --format=tar --prefix=sdautolock/ HEAD > tmp.tar
+	tar xf tmp.tar
+	rm tmp.tar
+	sed -i 's/^DATE =.*/DATE = '$(DATE)'/; s/^VERSION = .*/VERSION = '$(VERSION)'/' sdautolock/Makefile
+	rm sdautolock/.gitignore
+	tar c sdautolock | gzip > sdautolock-$(VERSION).tar.gz
+	rm -r sdautolock
 
 install: sdautolock sdautolock.1
 	install sdautolock $(PREFIX)/bin/
@@ -29,4 +38,4 @@ uninstall:
 	unlink $(PREFIX)/bin/sdautolock
 
 clean:
-	rm sdautolock.o sdautolock sdautolock.1
+	rm -f sdautolock.o sdautolock sdautolock.1 sdautolock-*.tar.gz

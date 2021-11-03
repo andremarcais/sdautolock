@@ -1,5 +1,5 @@
-override CFLAGS += `pkg-config --cflags libsystemd xcb xcb-screensaver` -Wall -Wunused
-override LDFLAGS += `pkg-config --libs libsystemd xcb xcb-screensaver`
+override CFLAGS += `pkg-config --cflags libsystemd` -Wall -Wunused
+override LDFLAGS += `pkg-config --libs libsystemd`
 
 DATE = `git log -n 1 --format=%as HEAD`
 SOURCE = sdautolock `git log -n 1 --format=%h HEAD`

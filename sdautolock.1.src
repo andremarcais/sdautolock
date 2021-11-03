@@ -48,7 +48,7 @@ can be sent to respectively disable and enable timer based locking.
 .SH EXAMPLE
 The command below locks the screen with i3lock and its "ignore empty password" option after 3 minutes of inactivity on X11:
 .EX
-sdautolock xprintidle 180 i3lock -e
+    sdautolock xprintidle 180 i3lock -e
 .EE
 .I i3lock
 closes

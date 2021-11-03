@@ -2,7 +2,7 @@ override CFLAGS += `pkg-config --cflags libsystemd` -Wall -Wunused
 override LDFLAGS += `pkg-config --libs libsystemd`
 
 DATE = `git log -n 1 --format=%as HEAD`
-SOURCE = sdautolock `git log -n 1 --format=%h HEAD`
+SOURCE = sdautolock `git describe --tags --always`
 
 PREFIX="/usr/local"
 

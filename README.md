@@ -38,6 +38,11 @@ To lock the screen with `i3lock`, using its ignore empty password option, after
 
 See the manual for explanation.
 
+## Status
+
+This project pretty much done. Only security updates and bug fixes from this
+point forward. (Or maybe a *really* appealing feature request.)
+
 ## Licensing
 
 Licensed under GPLv3.  See LICENSE.
